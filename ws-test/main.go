@@ -29,8 +29,7 @@ func run() error {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-
-	setupXdp()
+	go setupXdp()
 	InitGlobalStructs()
 
 	for i, val := range os.Args {
