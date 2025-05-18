@@ -30,9 +30,10 @@ func run() error {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 
+	setupXdp()
 	InitGlobalStructs()
-	
-	for i,val:= range os.Args {
+
+	for i, val := range os.Args {
 		fmt.Printf("%v : %v\n", i, val)
 	}
 	if len(os.Args) < 2 {
@@ -51,16 +52,14 @@ func run() error {
 		},
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,
-		IdleTimeout: 30,
-		// Will require 4kb header padding for accept request to make spam costly 
+		IdleTimeout:  30,
+		// Will require 4kb header padding for accept request to make spam costly
 		// Will also make this a limit for all messages for future ws requests
 
 		// Payload for connecting should be between [4kb-5kb) while msgs should be between [20b-4kb)
 		// Can then apply the above limit to filter/reject messages
 		// Is pretty constraint but should work well for text based comms
 		MaxHeaderBytes: 5000,
-
-		
 	}
 	errc := make(chan error, 1)
 	go func() {
