@@ -4,17 +4,35 @@ import (
 	"C"
 
 	bpf "github.com/aquasecurity/libbpfgo"
+	cilium "github.com/cilium/ebpf"
 )
 import (
-	"encoding/binary"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/signal"
+	"sync"
+	"time"
 )
 
+type MapOp string
+
+const (
+	MapAdd    MapOp = "add"
+	MapRemove MapOp = "remove"
+)
+
+type MapUpdateOp struct {
+	OpType MapOp
+	IP     uint32
+}
+
+var gBlockedIpsMap *cilium.Map
+var gMapUpdateQueue []MapUpdateOp = make([]MapUpdateOp, 1)
+
 func setupXdp() {
-	deviceName := "eth0" // "loopback0"
+	deviceName := "wlp0s20f3" // "loopback0"
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
@@ -44,32 +62,76 @@ func setupXdp() {
 	_, err = xdpProg.AttachXDP(deviceName)
 	stopOnError(err)
 
-	eventsChannel := make(chan []byte)
-	rb, err := bpfModule.InitRingBuf("events", eventsChannel)
-	stopOnError(err)
-
-	rb.Poll(300)
-	numberOfEventsReceived := 0
-
-recvLoop:
-
-	for {
-		b := <-eventsChannel
-		fmt.Printf("Received %v", binary.LittleEndian.Uint32(b))
-		numberOfEventsReceived++
-		if numberOfEventsReceived > 5 {
-			break recvLoop
-		}
+	// Load the pinned BPF map (or from ELF)
+	_blockedIPsMap, err := cilium.LoadPinnedMap("/sys/fs/bpf/blocked_ips", nil)
+	if err != nil {
+		fmt.Printf("Failed to load BPF map: %v\n", err)
 	}
-
-	rb.Stop()
-	rb.Close()
+	defer _blockedIPsMap.Close()
+	gBlockedIpsMap = _blockedIPsMap
 
 	<-sig
 	// Dont need to detach it as the new AttachXDP uses bpf_link and will detach automatically
 	// err = xdpProg.DetachXDPLegacy(deviceName, bpf.XDPFlagsReplace)
 	// stopOnError(err)
 	fmt.Println("Cleaning up")
+}
+
+func BlockIpAddress(ipKey uint32) bool {
+	// --- ADD AN IP TO BLOCK ---
+	if gBlockedIpsMap == nil {
+		return false
+	}
+
+	value := uint8(1) // 1 = blocked
+
+	// Insert into map
+	err := gBlockedIpsMap.Put(ipKey, value)
+	if err != nil {
+		log.Fatalf("Failed to block IP: %v\n", err)
+	}
+	fmt.Printf("Blocked IP: %v hex:0x%x\n", ipKey, ipKey)
+	return true
+}
+
+func UnblockedIpAddress(ipToBlock uint32) bool {
+	if gBlockedIpsMap == nil {
+		return false
+	}
+	// --- DELETE AN IP (UNBLOCK) ---
+	err := gBlockedIpsMap.Delete(ipToBlock)
+	if err != nil {
+		log.Fatalf("Failed to unblock IP: %v", err)
+	}
+	// fmt.Printf("Unblocked IP: %s\n", ipToBlock)
+	return true
+}
+
+func AddMapUpdateToQueue(updateOp MapUpdateOp) {
+	gMapUpdateQueue = append(gMapUpdateQueue, updateOp)
+}
+
+func processMapQueueUpdates(mu *sync.Mutex) {
+	for {
+		time.Sleep(100 * time.Millisecond)
+
+		mu.Lock()
+		if len(gMapUpdateQueue) == 0 {
+			mu.Unlock()
+			continue
+		}
+
+		for _, op := range gMapUpdateQueue {
+			switch op.OpType {
+			case MapAdd:
+				BlockIpAddress(op.IP)
+			case MapRemove:
+				UnblockedIpAddress(op.IP)
+			}
+		}
+		gMapUpdateQueue = gMapUpdateQueue[:0]
+		mu.Unlock()
+	}
 }
 
 func stopOnError(err error) {

@@ -14,24 +14,25 @@ import (
 )
 
 type CompactAddr struct {
-    IP   [4]byte // IPv4-only
-    Port uint16
+	IP   uint32 // IPv4-only
+	Port uint16
 }
 
 // Convert net.IP to [16]byte
 func NewCompactAddr(ip net.IP, port uint16) CompactAddr {
-    var ip4 [4]byte
-    copy(ip4[:], ip.To4()) // Ensure IPv4
-    return CompactAddr{IP: ip4, Port: port}
+	ip = ip.To4()
+	ip4 := uint32(ip[3])<<24 | uint32(ip[2])<<16 | uint32(ip[1])<<8 | uint32(ip[0])
+
+	return CompactAddr{IP: ip4, Port: port}
 }
 
 type Rate struct {
-	FirstReqUnixTsInMs int64
-	ValidNextReqTs int64
+	FirstReqUnixTsInMs       int64
+	ValidNextReqTs           int64
 	LastRateLimitViolationTs int64
-	
-	TokensLeft int8
-	ConnectTokenLeft int8
+
+	TokensLeft          int8
+	ConnectTokenLeft    int8
 	RateLimitViolations int8
 }
 
@@ -45,7 +46,7 @@ func (rate *Rate) WaitForToken(ctx context.Context, tokenQty uint) (bool, error)
 
 	if rate.TokensLeft <= 0 {
 		if rate.RateLimitViolations > 0 {
-			if ((rate.LastRateLimitViolationTs - unixTsNow) < RATE_LIMIT_INTERVAL/10){
+			if (rate.LastRateLimitViolationTs - unixTsNow) < RATE_LIMIT_INTERVAL/10 {
 				shouldDisconnect = true
 			} else {
 				rate.RateLimitViolations = 0
@@ -55,33 +56,33 @@ func (rate *Rate) WaitForToken(ctx context.Context, tokenQty uint) (bool, error)
 		if sleepMs > 0 {
 			fmt.Printf("rate limited waiting for %v ms\n", sleepMs)
 			timerDur += time.Duration(sleepMs) * time.Millisecond
-			unixTsNow +=sleepMs
+			unixTsNow += sleepMs
 		}
 		rate.RateLimitViolations++
 		rate.LastRateLimitViolationTs = unixTsNow
-	} 
-	if rate.FirstReqUnixTsInMs + RATE_LIMIT_INTERVAL < unixTsNow {
+	}
+	if rate.FirstReqUnixTsInMs+RATE_LIMIT_INTERVAL < unixTsNow {
 		rate.FirstReqUnixTsInMs = unixTsNow
 		rate.TokensLeft = MAX_TOKENS
 	}
 	rate.TokensLeft -= 1
-	
+
 	select {
-		case <- ctx.Done():
-			return shouldDisconnect, ctx.Err()
-		case <- time.After(timerDur):
-			return shouldDisconnect, nil
+	case <-ctx.Done():
+		return shouldDisconnect, ctx.Err()
+	case <-time.After(timerDur):
+		return shouldDisconnect, nil
 	}
 }
 
 //go:inline
 func (rate *Rate) WindowActive() bool {
-	return rate.FirstReqUnixTsInMs + RATE_LIMIT_INTERVAL  > time.Now().UnixMilli()
+	return rate.FirstReqUnixTsInMs+RATE_LIMIT_INTERVAL > time.Now().UnixMilli()
 }
 
 type ConnectionRateData struct {
 	ConnectionActive bool
-	RateData Rate
+	RateData         Rate
 }
 
 func StringTo20Byte(s string) [20]byte {

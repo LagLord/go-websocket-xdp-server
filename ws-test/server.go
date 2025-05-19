@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,7 +29,7 @@ var authenticatedPlayerToAddrMap map[[20]byte]models.CompactAddr
 var rateLimitMap map[[20]byte]*models.Rate
 
 // Rate limit IPv4 address map any possible connection requests made by an ip will be recorded
-var hardRateLimitedIPMap map[[4]byte]models.Rate
+var hardRateLimitedIPMap map[uint32]models.Rate
 var hrlMutex sync.Mutex
 
 var connectionStructuresMutex sync.RWMutex
@@ -39,11 +38,11 @@ var activeConnectionsToDrop []models.CompactAddr
 func InitGlobalStructs() {
 
 	authenticatedPlayerToAddrMap = map[[20]byte]models.CompactAddr{}
-	authenticatedPlayerToAddrMap[models.StringTo20Byte("cardano")] = models.NewCompactAddr(net.IP{}, 0)
+	authenticatedPlayerToAddrMap[models.StringTo20Byte("cardano")] = models.NewCompactAddr([]byte{0, 0, 0, 0}, 0)
 
 	rateLimitMap = map[[20]byte]*models.Rate{}
 
-	hardRateLimitedIPMap = map[[4]byte]models.Rate{}
+	hardRateLimitedIPMap = map[uint32]models.Rate{}
 	activeConnectionsToDrop = make([]models.CompactAddr, 0, 5)
 
 }
@@ -124,6 +123,7 @@ func (s echoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.logf("%v", err)
 		return
 	}
+	c.CloseNow()
 	shouldCloseConn := true
 
 	defer func() {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go-first/ws-test/models"
 	"log"
 	"net"
 	"net/http"
@@ -30,6 +31,14 @@ func run() error {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
 	go setupXdp()
+	go processMapQueueUpdates(&hrlMutex)
+	go func() {
+		time.Sleep(5 * time.Second)
+		AddMapUpdateToQueue(MapUpdateOp{
+			OpType: "add",
+			IP:     models.NewCompactAddr(net.IPv4(192, 168, 1, 8), 1).IP,
+		})
+	}()
 	InitGlobalStructs()
 
 	for i, val := range os.Args {
@@ -58,7 +67,7 @@ func run() error {
 		// Payload for connecting should be between [4kb-5kb) while msgs should be between [20b-4kb)
 		// Can then apply the above limit to filter/reject messages
 		// Is pretty constraint but should work well for text based comms
-		MaxHeaderBytes: 5000,
+		MaxHeaderBytes: 1024,
 	}
 	errc := make(chan error, 1)
 	go func() {
