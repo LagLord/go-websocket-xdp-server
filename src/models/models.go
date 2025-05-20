@@ -10,7 +10,7 @@ import (
 	"unsafe"
 
 	//lint:ignore ST1001 acceptable here.
-	. "go-first/ws-test/constants"
+	. "ws-server/src/constants"
 )
 
 type CompactAddr struct {

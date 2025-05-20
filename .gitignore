@@ -1,6 +1,6 @@
 _*.go
 test
 
-ws-test/*o
-ws-test/main
+src/*.o
+src/main
 .*

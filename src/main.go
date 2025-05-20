@@ -12,8 +12,8 @@ import (
 	"os/signal"
 	"time"
 
-	"go-first/ws-test/utils"
 	_ "net/http/pprof"
+	"ws-server/src/utils"
 )
 
 func main() {
@@ -28,15 +28,6 @@ func main() {
 // run starts a http.Server for the passed in address
 // with all requests handled by echoServer.
 func run() error {
-	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
-	}()
-	go utils.SetupXdp()
-
-	serverCtx := &ServerContext{}
-	InitGlobalStructs(serverCtx)
-
-	go utils.ProcessMapQueueUpdates(&serverCtx.HRLMutex)
 	// For testing
 	// go func() {
 	// 	time.Sleep(5 * time.Second)
@@ -52,6 +43,16 @@ func run() error {
 	if len(os.Args) < 2 {
 		return errors.New("please provide an address to listen on as the first argument")
 	}
+	if len(os.Args) < 3 {
+		return errors.New("please provide an interface to attach the xdp filter (To list all use `sudo xdp-loader status`)")
+	}
+
+	go utils.SetupXdp(os.Args[2])
+
+	serverCtx := &ServerContext{}
+	InitGlobalStructs(serverCtx)
+
+	go utils.ProcessMapQueueUpdates(&serverCtx.HRLMutex)
 
 	l, err := net.Listen("tcp", os.Args[1])
 	if err != nil {

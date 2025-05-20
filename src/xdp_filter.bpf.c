@@ -9,7 +9,7 @@
 
     USAGE:
 
-        cd ./ws-test
+        cd ./src
         make
         ./main IP:PORT
         sudo cat /sys/kernel/debug/tracing/trace_pipe

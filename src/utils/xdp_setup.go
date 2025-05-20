@@ -3,7 +3,6 @@ package utils
 import (
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"sync"
@@ -28,20 +27,11 @@ type MapUpdateOp struct {
 var gBlockedIpsMap *cilium.Map
 var gMapUpdateQueue []MapUpdateOp = make([]MapUpdateOp, 1)
 
-func SetupXdp() {
-	deviceName := "wlp0s20f3" // "loopback0"
+func SetupXdp(_interface string) {
+	deviceName := _interface // "wlp0s20f3"
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt)
-
-	interfaces, err := net.Interfaces()
-	if err != nil {
-		panic(err)
-	}
-	for _, iface := range interfaces {
-		fmt.Println(iface.Name) // Prints all valid device names
-	}
-
 	bpfModule, err := bpf.NewModuleFromFile("xdp_filter.bpf.o")
 	stopOnError(err)
 	defer bpfModule.Close()

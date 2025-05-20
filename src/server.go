@@ -13,9 +13,9 @@ import (
 	"time"
 
 	//lint:ignore ST1001 acceptable here.
-	. "go-first/ws-test/constants"
-	"go-first/ws-test/models"
-	"go-first/ws-test/utils"
+	. "ws-server/src/constants"
+	"ws-server/src/models"
+	"ws-server/src/utils"
 
 	"github.com/coder/websocket"
 )

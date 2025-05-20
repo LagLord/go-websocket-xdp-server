@@ -5,8 +5,8 @@ import (
 	"unsafe"
 
 	//lint:ignore ST1001 acceptable here.
-	. "go-first/ws-test/constants"
-	"go-first/ws-test/models"
+	. "ws-server/src/constants"
+	"ws-server/src/models"
 
 	"net"
 	"strconv"
