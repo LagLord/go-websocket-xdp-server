@@ -1,10 +1,10 @@
 package main
 
 import (
+	"C"
 	"context"
 	"errors"
 	"fmt"
-	"go-first/ws-test/models"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"time"
 
+	"go-first/ws-test/utils"
 	_ "net/http/pprof"
 )
 
@@ -30,17 +31,21 @@ func run() error {
 	go func() {
 		log.Println(http.ListenAndServe("localhost:6060", nil))
 	}()
-	go setupXdp()
-	go processMapQueueUpdates(&hrlMutex)
-	go func() {
-		time.Sleep(5 * time.Second)
-		AddMapUpdateToQueue(MapUpdateOp{
-			OpType: "add",
-			IP:     models.NewCompactAddr(net.IPv4(192, 168, 1, 8), 1).IP,
-		})
-	}()
-	InitGlobalStructs()
+	go utils.SetupXdp()
 
+	serverCtx := &ServerContext{}
+	InitGlobalStructs(serverCtx)
+
+	go utils.ProcessMapQueueUpdates(&serverCtx.HRLMutex)
+	// For testing
+	// go func() {
+	// 	time.Sleep(5 * time.Second)
+	// 	utils.AddMapUpdateToQueue(utils.MapUpdateOp{
+	// 		OpType: "add",
+	// 		IP:     models.NewCompactAddr(net.IPv4(192, 168, 1, 8), 1).IP,
+	// 	})
+	// }()
+	//
 	for i, val := range os.Args {
 		fmt.Printf("%v : %v\n", i, val)
 	}
@@ -56,7 +61,8 @@ func run() error {
 
 	s := &http.Server{
 		Handler: echoServer{
-			logf: log.Printf,
+			logf:      log.Printf,
+			serverCtx: serverCtx,
 		},
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,

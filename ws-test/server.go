@@ -20,30 +20,36 @@ import (
 	"github.com/coder/websocket"
 )
 
-// PlayerId -> IP:port map per authenticated player
-//
-// # valid address means player is connected
-var authenticatedPlayerToAddrMap map[[20]byte]models.CompactAddr
+type ServerContext struct {
 
-// Rate limit playerId map per authenticated player stays active between disconnects
-var rateLimitMap map[[20]byte]*models.Rate
+	// PlayerId -> IP:port map per authenticated player
+	//
+	// # valid address means player is connected
+	AuthenticatedPlayerIDToAddrMap map[[20]byte]models.CompactAddr
 
-// Rate limit IPv4 address map any possible connection requests made by an ip will be recorded
-var hardRateLimitedIPMap map[uint32]models.Rate
-var hrlMutex sync.Mutex
+	// Rate limit playerId map per authenticated player stays active between disconnects
+	RateLimitMap map[[20]byte]*models.Rate
 
-var connectionStructuresMutex sync.RWMutex
-var activeConnectionsToDrop []models.CompactAddr
+	// Rate limit IPv4 address map any possible connection requests made by an ip will be recorded
+	HardRateLimitedIPMap map[uint32]models.Rate
 
-func InitGlobalStructs() {
+	HRLMutex                  sync.Mutex
+	ConnectionStructuresMutex sync.RWMutex
+	ActiveConnectionsToDrop   []models.CompactAddr
+}
 
-	authenticatedPlayerToAddrMap = map[[20]byte]models.CompactAddr{}
-	authenticatedPlayerToAddrMap[models.StringTo20Byte("cardano")] = models.NewCompactAddr([]byte{0, 0, 0, 0}, 0)
+func InitGlobalStructs(serverCtx *ServerContext) {
 
-	rateLimitMap = map[[20]byte]*models.Rate{}
+	serverCtx.AuthenticatedPlayerIDToAddrMap = map[[20]byte]models.CompactAddr{}
+	serverCtx.AuthenticatedPlayerIDToAddrMap[models.StringTo20Byte("cardano")] = models.NewCompactAddr([]byte{0, 0, 0, 0}, 0)
 
-	hardRateLimitedIPMap = map[uint32]models.Rate{}
-	activeConnectionsToDrop = make([]models.CompactAddr, 0, 5)
+	serverCtx.RateLimitMap = map[[20]byte]*models.Rate{}
+
+	serverCtx.HardRateLimitedIPMap = map[uint32]models.Rate{}
+
+	serverCtx.HRLMutex = sync.Mutex{}
+	serverCtx.ConnectionStructuresMutex = sync.RWMutex{}
+	serverCtx.ActiveConnectionsToDrop = make([]models.CompactAddr, 0, 5)
 
 }
 
@@ -52,7 +58,8 @@ func InitGlobalStructs() {
 // only allows one message every 100ms with a 10 message burst.
 type echoServer struct {
 	// logf controls where logs are sent.
-	logf func(f string, v ...interface{})
+	logf      func(f string, v ...interface{})
+	serverCtx *ServerContext
 }
 
 func getSizeInBytes(m map[string][]string) int {
@@ -61,7 +68,11 @@ func getSizeInBytes(m map[string][]string) int {
 }
 
 //go:inline
-func isOldClient(remoteAddress models.CompactAddr) bool {
+func checkAndUpdateOldClient(
+	remoteAddress models.CompactAddr,
+	activeConnectionsToDrop []models.CompactAddr,
+	connectionStructuresMutex *sync.RWMutex,
+) []models.CompactAddr {
 	// We don't need to modify any mappings
 	if len(activeConnectionsToDrop) > 0 {
 		connectionStructuresMutex.RLock()
@@ -77,12 +88,12 @@ func isOldClient(remoteAddress models.CompactAddr) bool {
 				activeConnectionsToDrop = activeConnectionsToDrop[:sliceLen-1]
 
 				connectionStructuresMutex.Unlock()
-				return true
+				return activeConnectionsToDrop
 			}
 		}
 		connectionStructuresMutex.RUnlock()
 	}
-	return false
+	return nil
 }
 
 func (s echoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -90,21 +101,22 @@ func (s echoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "client must speak the echo subprotocol", 400)
 		return
 	}
+	serverCtx := s.serverCtx
 
 	playerId := models.StringTo20Byte(r.Header.Get("Player-ID"))
 
-	fmt.Printf("[%v] Connection Req from -> %v\n%v\n", getSizeInBytes(r.Header), playerId, r.Header)
-	fmt.Printf("Connection IP:Port -> %v\n", r.RemoteAddr)
+	s.logf("[%v] Connection Req from -> %v\n%v\n", getSizeInBytes(r.Header), playerId, r.Header)
+	s.logf("Connection IP:Port -> %v\n", r.RemoteAddr)
 
-	oldRemoteAddress, exists := authenticatedPlayerToAddrMap[playerId]
-	remoteAddr := utils.DropOldConnections(oldRemoteAddress, r.RemoteAddr, &connectionStructuresMutex, &activeConnectionsToDrop)
+	oldRemoteAddress, exists := serverCtx.AuthenticatedPlayerIDToAddrMap[playerId]
+	remoteAddr := utils.DropOldConnections(oldRemoteAddress, r.RemoteAddr, &serverCtx.ConnectionStructuresMutex, &serverCtx.ActiveConnectionsToDrop)
 	if remoteAddr.Port == 0 {
 		// Invalid remote connection
 		http.Error(w, "invalid ipv4 address", 400)
 		return
 	}
 	if !exists {
-		retryNextTs := utils.SaveConnectionRequestData(&hardRateLimitedIPMap, remoteAddr.IP, &hrlMutex)
+		retryNextTs := utils.SaveConnectionRequestData(&serverCtx.HardRateLimitedIPMap, remoteAddr.IP, &serverCtx.HRLMutex)
 		var builder strings.Builder
 		builder.WriteString("invalid request")
 		tsNow := time.Now().UnixMilli()
@@ -123,21 +135,20 @@ func (s echoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.logf("%v", err)
 		return
 	}
-	c.CloseNow()
-	shouldCloseConn := true
 
+	shouldCloseConn := true
 	defer func() {
 		if shouldCloseConn {
 			c.CloseNow()
 		}
-		connectionStructuresMutex.Lock()
-		authenticatedPlayerToAddrMap[playerId] = models.CompactAddr{}
-		connectionStructuresMutex.Unlock()
+		serverCtx.ConnectionStructuresMutex.Lock()
+		serverCtx.AuthenticatedPlayerIDToAddrMap[playerId] = models.CompactAddr{}
+		serverCtx.ConnectionStructuresMutex.Unlock()
 	}()
 
-	authenticatedPlayerToAddrMap[playerId] = remoteAddr
+	serverCtx.AuthenticatedPlayerIDToAddrMap[playerId] = remoteAddr
 	// If player's connections is successful request tokens will stay 0
-	existingConnectionData, exists := rateLimitMap[playerId]
+	existingConnectionData, exists := serverCtx.RateLimitMap[playerId]
 	var (
 		useExisting              = exists && existingConnectionData.WindowActive()
 		startTime                int64
@@ -170,9 +181,12 @@ func (s echoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		RateLimitViolations:      rateLimitViolations,
 	}
 
-	rateLimitMap[playerId] = &newConnectionData
+	serverCtx.RateLimitMap[playerId] = &newConnectionData
 	for {
-		if isOldClient(remoteAddr) {
+		newActiveConnsToDrop := checkAndUpdateOldClient(remoteAddr, serverCtx.ActiveConnectionsToDrop, &serverCtx.ConnectionStructuresMutex)
+
+		if newActiveConnsToDrop != nil {
+			serverCtx.ActiveConnectionsToDrop = newActiveConnsToDrop
 			s.logf("Old client disconnected %v", r.RemoteAddr)
 			return
 		}
@@ -193,7 +207,7 @@ func (s echoServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // echo reads from the WebSocket connection and then writes
 // the received message back to it.
-// The entire function has 10s to complete.
+// The entire function has 30s to complete.
 func echo(c *websocket.Conn, l *models.Rate) error {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()

@@ -76,11 +76,31 @@ func SaveConnectionRequestData(
 		_rate.ConnectTokenLeft = max(0, _rate.ConnectTokenLeft-TOKEN_CONSUMPTION_PER_REQUEST)
 
 		// If another violation or all tokens spent
-		if (_rate.ValidNextReqTs > unixTsNow) || (_rate.ConnectTokenLeft == 0 && windowActive) {
+		var violationActive = (_rate.ValidNextReqTs > unixTsNow)
+		var tokensSpent = (_rate.ConnectTokenLeft == 0 && windowActive)
+		if violationActive || tokensSpent {
 			// Rate limit violation in case missed by xdp
 			_rate.RateLimitViolations++
 			backoff := min(EXPONENTIAL_BACKOFF_RATE_LIMIT_MS*(1<<_rate.RateLimitViolations), MAX_RETRY_AFTER_MS)
 			_rate.ValidNextReqTs = unixTsNow + int64(backoff)
+
+			if violationActive {
+				RemoveOldMapUpdatesFromQueue(ip)
+			}
+			// Add to blocked ips
+			AddMapUpdateToQueue(MapUpdateOp{
+				OpType: MapAdd,
+				IP:     ip,
+			})
+			// Remove from blocked ips after rate limit ts
+			go func() {
+				time.After(time.Duration(int64(backoff)) * time.Millisecond)
+				AddMapUpdateToQueue(MapUpdateOp{
+					OpType: MapRemove,
+					IP:     ip,
+				})
+			}()
+
 		} else if !windowActive {
 			_rate.FirstReqUnixTsInMs = unixTsNow
 			_rate.ValidNextReqTs = 0

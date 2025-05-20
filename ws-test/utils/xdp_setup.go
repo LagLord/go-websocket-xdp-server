@@ -1,11 +1,5 @@
-package main
+package utils
 
-import (
-	"C"
-
-	bpf "github.com/aquasecurity/libbpfgo"
-	cilium "github.com/cilium/ebpf"
-)
 import (
 	"fmt"
 	"log"
@@ -14,6 +8,9 @@ import (
 	"os/signal"
 	"sync"
 	"time"
+
+	bpf "github.com/aquasecurity/libbpfgo"
+	cilium "github.com/cilium/ebpf"
 )
 
 type MapOp string
@@ -31,7 +28,7 @@ type MapUpdateOp struct {
 var gBlockedIpsMap *cilium.Map
 var gMapUpdateQueue []MapUpdateOp = make([]MapUpdateOp, 1)
 
-func setupXdp() {
+func SetupXdp() {
 	deviceName := "wlp0s20f3" // "loopback0"
 
 	sig := make(chan os.Signal, 1)
@@ -107,11 +104,25 @@ func UnblockedIpAddress(ipToBlock uint32) bool {
 	return true
 }
 
+// This will be called with mutex
 func AddMapUpdateToQueue(updateOp MapUpdateOp) {
 	gMapUpdateQueue = append(gMapUpdateQueue, updateOp)
 }
 
-func processMapQueueUpdates(mu *sync.Mutex) {
+func RemoveOldMapUpdatesFromQueue(ip uint32) {
+	for i, op := range gMapUpdateQueue {
+		if op.IP == ip {
+			// Remove old update
+			sliceLen := len(gMapUpdateQueue)
+			if i != sliceLen-1 {
+				gMapUpdateQueue[i] = gMapUpdateQueue[sliceLen-1]
+			}
+			gMapUpdateQueue = gMapUpdateQueue[:sliceLen-1]
+		}
+	}
+}
+
+func ProcessMapQueueUpdates(mu *sync.Mutex) {
 	for {
 		time.Sleep(100 * time.Millisecond)
 
